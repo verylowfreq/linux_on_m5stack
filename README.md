@@ -1,13 +1,12 @@
 # Linux on M5Stack
 
-Linux (RISC-V RV32IMA) runs on M5Stack (ESP32;Xtensa LX6).
+Linux (RISC-V RV32IMA) runs on M5Stack (ESP32;Xtensa LX6). RISC-V emulator is based on https://github.com/cnlohr/mini-rv32ima
 
-RISC-V emulator is based on https://github.com/cnlohr/mini-rv32ima
+Linux (RISC-V RV32IMA) を M5Stack (ESP32;Xtensa LX6) で動かします。RISC-V エミュレータ部分は https://github.com/cnlohr/mini-rv32ima をもとにしています。
 
-Linux (RISC-V RV32IMA) を M5Stack (ESP32;Xtensa LX6) で動かします。
+**Video on YouTube**: [https://youtu.be/fL6IANjZWvc](https://youtu.be/fL6IANjZWvc)
 
-RISC-V エミュレータ部分は https://github.com/cnlohr/mini-rv32ima をもとにしています。
-
+![Linux runs on M5Stack with keyboard face](https://user-images.githubusercontent.com/60875431/206839056-dc8cb83e-9840-491d-94ed-bb84dae6c597.jpg)
 
 ## How to execute / 実行方法
 
@@ -17,7 +16,7 @@ RISC-V エミュレータ部分は https://github.com/cnlohr/mini-rv32ima をも
  4. Run.
     1. Show banner.
     2. Press center button.
-    3. Booting Linux. Wait about 5 minutes.
+    3. Booting Linux. Wait about 8 minutes.
     4. Login with `root` without password. You can input with Keyboard FACE or Serial. The shell will appear after 1 minutes.
 
 .
@@ -28,7 +27,7 @@ RISC-V エミュレータ部分は https://github.com/cnlohr/mini-rv32ima をも
  4. 実行します。
     1. バナーが表示されます。
     2. M5Stack本体の中央のボタンを押します。
-    3. 約5分をかけてLinuxが起動します。
+    3. 約8分をかけてLinuxが起動します。
     4. `root`でログインします。パスワードはありません。文字入力はFACESのキーボードとシリアル通信が利用できます。約1分でシェルが起動します。
 
 ## Linuxイメージをビルドする
@@ -49,9 +48,6 @@ RISC-V エミュレータ部分は https://github.com/cnlohr/mini-rv32ima をも
 
 ## License
 
-MIT License, Refer License file.
+MIT License, Refer LICENSE file.
 
 Copyright (c) 2022 verylowfreq
-
-Copyright (c) 2022 CNLohr
-
