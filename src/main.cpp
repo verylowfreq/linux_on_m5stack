@@ -2,8 +2,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <M5Stack.h>
-// #include <SD.h>
 #include <esp_task_wdt.h>
+#include <driver/adc.h>
 
 #include "debug.h"
 #include "config.h"
@@ -270,6 +270,35 @@ static bool copy_file_to_ram(const char* srcfilepath, uint32_t dstaddr) {
   return true;
 }
 
+static
+bool update_ramsize_in_dtb(uint32_t dtb_addr, uint32_t newramsize) {
+  DEBUG("Update RAM size in DTB");
+  
+  // Update system ram size in DTB (but if and only if we're using the default DTB)
+  // Warning - this will need to be updated if the skeleton DTB is ever modified.
+
+  // Replace [ 0x03, 0xff, 0xc0, 0x00 ] as uint32_t BIG ENDIANNESS
+
+  uint32_t offset = 0x13c;
+  uint32_t targetaddr = dtb_addr + offset;
+
+  uint8_t orig_data[4] = { 0, 0, 0, 0 };
+  assert(ram.read_block(targetaddr, orig_data, 4));
+  uint32_t orig_value = orig_data[0] << 24 | orig_data[1] << 16 | orig_data[2] << 8 | orig_data[3];
+  DEBUG("RAM size in DTB is 0x%08x(%d) bytes", orig_value, orig_value);
+
+  uint8_t data[4] = {
+    (uint8_t)(ram_amt >> 24),
+    (uint8_t)((ram_amt >> 16) & 0xff),
+    (uint8_t)((ram_amt >> 8) & 0xff),
+    (uint8_t)(ram_amt & 0xff)
+  };
+  assert(ram.write_block(targetaddr, data, 4));
+  DEBUG("  Replaced with 0x%08x(%d)", ram_amt, ram_amt);
+
+  return true;
+}
+
 void draw_banner(void) {
   spibus_is_ready(); 
   Lcd.clear();
@@ -393,7 +422,6 @@ void test_sdcard(void) {
   uint32_t totalrdlen = 0;
   unsigned long start = millis();
   while (true) {
-    // int rdlen = file.read(buf, 8192 * 2);
     size_t rdlen = sdfile_read(&file, buflen, buf);
     if (rdlen <= 0) {
       break;
@@ -406,6 +434,152 @@ void test_sdcard(void) {
   PANIC("Finished.");
 }
 
+
+bool save_vmstate(const char* filepath, struct MiniRV32IMAState* src) {
+  sdfile_t file;
+  if (!sdfile_open_write(&sdfilectx, &file, filepath)) {
+    ERROR("Failed to open %s", filepath);
+    return false;
+  }
+  // sdfile_seek(&file, 0);
+  size_t len = sizeof(struct MiniRV32IMAState);
+  size_t wrlen = sdfile_write(&file, len, src);
+  if (wrlen != len) {
+    ERROR("Failed to sdfile_write(). expected %u but actual %u", len, wrlen);
+    sdfile_close(&file);
+    return false;
+  }
+  DEBUG("OK.");
+  sdfile_close(&file);
+  return true;
+}
+
+bool restore_vmstate(const char* filepath, struct MiniRV32IMAState* dst) {
+  sdfile_t file;
+  if (!sdfile_open_read(&sdfilectx, &file, filepath)) {
+    ERROR("Failed to open %s", filepath);
+    return false;
+  }
+  sdfile_seek(&file, 0);
+  size_t len = sizeof(struct MiniRV32IMAState);
+  size_t rdlen = sdfile_read(&file, len, dst);
+  if (rdlen != len) {
+    ERROR("Failed to sdfile_read(). expected %u but actual %u", len, rdlen);
+    return false;
+  }
+  DEBUG("OK.");
+  sdfile_close(&file);
+  return true;
+}
+
+const char* vmstatefilepath = "/cpustate.bin";
+
+bool hibernate(void) {
+
+  ram.flush();
+
+  if (!save_vmstate(vmstatefilepath, core)) {
+    ERROR("Failed to save_vmstate()");
+    return false;
+  }
+
+  DEBUG("Hibernate OK.");
+  DEBUG("Ready to shutdown.");;
+
+  // On success, no return
+  while (true) {
+    delay(1000);
+  }
+}
+
+bool resume(void) {
+  DEBUG("Init SD");
+  if (!sdfile_init(&sdfilectx)) {
+    PANIC("Failed to init SDCard");
+  }
+  sdfile_set_spibus_ready(&sdfilectx, spibus_is_ready);
+
+  DEBUG("Init RAM...");
+  uint32_t ramsize = __ram.init(false, RAMDEVICE_SDFILE_BUFLEN);
+  if (ramsize == 0) {
+    PANIC("Failed to init RAM.");
+  }
+  
+  DEBUG("Init RAM cache.");
+  if (!ram.init()) {
+    PANIC("Failed to init RAM cache.");
+  }
+  DEBUG("  RAM %d bytes ready.", ramsize);
+
+  if (!restore_vmstate(vmstatefilepath, core)) {
+    PANIC("Failed to restore vm state.");
+  }
+  
+	CaptureKeyboardInput();
+
+  return true;
+}
+
+bool startnew(void) {
+  
+  DEBUG("Init SD");
+  if (!sdfile_init(&sdfilectx)) {
+    PANIC("Failed to init SDCard");
+  }
+  sdfile_set_spibus_ready(&sdfilectx, spibus_is_ready);
+
+  DEBUG("Init RAM...");
+  uint32_t ramsize = __ram.init(false, RAMDEVICE_SDFILE_BUFLEN);
+  if (ramsize == 0) {
+    PANIC("Failed to init RAM.");
+  }
+  
+  DEBUG("Init RAM cache.");
+  if (!ram.init()) {
+    PANIC("Failed to init RAM cache.");
+  }
+  DEBUG("  RAM %d bytes ready.", ramsize);
+  
+  DEBUG("Copy image...");
+  {
+    unsigned long start_millis = millis();
+    if (!copy_file_to_ram("/boot.bin", 0)) {
+      PANIC("Failed to copy_file_to_ram()");
+    }
+    DEBUG("  copied in %ld [msec].", millis() - start_millis);
+  }
+
+  DEBUG("Copy DTB...");
+  uint32_t dtb_addr;
+  {
+    uint32_t dtbsize = sizeof(default64mbdtb);
+    uint32_t dtb_startaddr = ram_amt - dtbsize - sizeof(struct MiniRV32IMAState);
+    if (!ram.write_block(dtb_startaddr, (uint8_t*)default64mbdtb, dtbsize)) {
+      PANIC("Failed to copy DTB.");
+    }
+    dtb_addr = dtb_startaddr;
+    ram.flush();
+  }
+  
+
+	CaptureKeyboardInput();
+
+  DEBUG("Init core...");
+	// The core lives at the end of RAM.
+	core->pc = MINIRV32_RAM_IMAGE_OFFSET;
+	core->regs[10] = 0x00; //hart ID
+	core->regs[11] = dtb_addr?(dtb_addr+MINIRV32_RAM_IMAGE_OFFSET):0; //dtb_pa (Must be valid pointer) (Should be pointer to dtb)
+	core->extraflags |= 3; // Machine-mode.
+
+  if (ram_amt != RAMSIZE_DEFINE_IN_DTB) {
+    if (!update_ramsize_in_dtb(dtb_addr, ram_amt)) {
+      PANIC("Failed to update_ramsize_in_dtb() dtb=addr=%08x, ram_amt=%u", dtb_addr, ram_amt);
+    }
+  }
+
+  return true;
+}
+
 // ---- Defined in M5Stack library's Power.cpp
 
 #define CURRENT_100MA  (0x01 << 0)
@@ -416,6 +590,7 @@ void test_sdcard(void) {
 
 void setup() {
   esp_log_level_set("*", ESP_LOG_INFO);
+  adc_power_acquire();
 
   M5.begin(true, false, true, true);
 
@@ -440,9 +615,27 @@ void setup() {
 
   Serial.println("Press Enter to start...");
   draw_banner();
-  Lcd.print("Press center button to start...");
+  Lcd.println("Press left button to resume...");
+  Lcd.println("Press center button to start fresh...");
 
-  config_over_serial();
+  // config_over_serial();
+
+  bool mode_resume = false;
+  bool mode_startnew = false;
+
+  while (true) {
+    M5.update();
+    if (M5.BtnA.wasPressed()) {
+      DEBUG("Resume mode");
+      mode_resume = true;
+      break;
+    } else if (M5.BtnB.wasPressed()) {
+      DEBUG("Start new");
+      mode_startnew = true;
+      break;
+    }
+    delay(10);
+  }
 
   Lcd.clear();
   Lcd.setCursor(0, 0);
@@ -457,80 +650,14 @@ void setup() {
   disableCore0WDT();
   disableCore1WDT();
 
-  DEBUG("Init SD");
-  if (!sdfile_init(&sdfilectx)) {
-    PANIC("Failed to init SDCard");
-  }
-  sdfile_set_spibus_ready(&sdfilectx, spibus_is_ready);
-
-  DEBUG("Init RAM...");
-  uint32_t ramsize = __ram.init(false, RAMDEVICE_SDFILE_BUFLEN);
-  if (ramsize == 0) {
-    PANIC("Failed to init RAM.");
-  }
-
-  DEBUG("Init RAM cache.");
-  if (!ram.init()) {
-    PANIC("Failed to init RAM cache.");
-  }
-  DEBUG("  RAM %d bytes ready.", ramsize);
-
-  DEBUG("Copy image...");
-  {
-    unsigned long start_millis = millis();
-    if (!copy_file_to_ram("/boot.bin", 0)) {
-      PANIC("Failed to copy_file_to_ram()");
-    }
-    DEBUG("  copied in %ld [msec].", millis() - start_millis);
-  }
-
-  DEBUG("Copy DTB...");
-  uint32_t dtb_addr;
-  {
-    uint32_t dtbsize = sizeof(default64mbdtb);
-    uint32_t dtb_startaddr = ram_amt - dtbsize - sizeof(struct MiniRV32IMAState);
-    if (!ram.write_block(dtb_startaddr, (uint8_t*)default64mbdtb, dtbsize)) {
-      PANIC("Failed to copy DTB.");
-    }
-    dtb_addr = dtb_startaddr;
-    ram.flush();
-  }
-
-
-	CaptureKeyboardInput();
-
-  DEBUG("Init core...");
-	// The core lives at the end of RAM.
-	core->pc = MINIRV32_RAM_IMAGE_OFFSET;
-	core->regs[10] = 0x00; //hart ID
-	core->regs[11] = dtb_addr?(dtb_addr+MINIRV32_RAM_IMAGE_OFFSET):0; //dtb_pa (Must be valid pointer) (Should be pointer to dtb)
-	core->extraflags |= 3; // Machine-mode.
-
-  if (ram_amt != RAMSIZE_DEFINE_IN_DTB) {
-    DEBUG("Update RAM size in DTB");
-    {
-      // Update system ram size in DTB (but if and only if we're using the default DTB)
-      // Warning - this will need to be updated if the skeleton DTB is ever modified.
-
-      // Replace [ 0x03, 0xff, 0xc0, 0x00 ] as uint32_t BIG ENDIANNESS
-
-      uint32_t offset = 0x13c;
-      uint32_t targetaddr = dtb_addr + offset;
-
-      uint8_t orig_data[4] = { 0, 0, 0, 0 };
-      assert(ram.read_block(targetaddr, orig_data, 4));
-      uint32_t orig_value = orig_data[0] << 24 | orig_data[1] << 16 | orig_data[2] << 8 | orig_data[3];
-      DEBUG("RAM size in DTB is 0x%08x(%d) bytes", orig_value, orig_value);
-
-      uint8_t data[4] = {
-        (uint8_t)(ram_amt >> 24),
-        (uint8_t)((ram_amt >> 16) & 0xff),
-        (uint8_t)((ram_amt >> 8) & 0xff),
-        (uint8_t)(ram_amt & 0xff)
-      };
-      assert(ram.write_block(targetaddr, data, 4));
-      DEBUG("  Replaced with 0x%08x(%d)", ram_amt, ram_amt);
-    }
+  if (mode_startnew) {
+    // Start fresh VM
+    startnew();
+  } else if (mode_resume) {
+    // Resume from previous state file on microSD.
+    resume();
+  } else {
+    PANIC("Invalid state. neither mode_resume and mode_startnew was selected.");
   }
 
   DEBUG("Initialized.");
@@ -562,6 +689,21 @@ void loop() {
         }
         draw_header();
         prev_update_header = millis();
+      }
+
+      M5.update();
+      if (M5.BtnA.pressedFor(500)) {
+        DEBUG("Hibernating...");
+        if (!hibernate()) {
+          ERROR("Failed to hibernate. Continue to execution.");
+          while (true) {
+            M5.update();
+            if (M5.BtnA.isReleased()) {
+              break;
+            }
+            delay(10);
+          }
+        }
       }
 
       uint64_t * this_ccount = ((uint64_t*)&core->cyclel);

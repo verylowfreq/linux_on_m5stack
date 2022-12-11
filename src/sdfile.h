@@ -110,6 +110,16 @@ bool sdfile_open_readwrite(sdfilecontext_t* ctx, sdfile_t* self, const char* fil
     return true;
 }
 
+bool sdfile_open_write(sdfilecontext_t* ctx, sdfile_t* self, const char* filepath) {
+    self->file = ctx->sd.open(filepath, O_WRITE | O_CREAT);
+    if (!self->file) {
+        ERROR("Failed to open() %s", filepath);
+        return false;
+    }
+    // self->file.seek(0);
+    return true;
+}
+
 bool sdfile_close(sdfile_t* self) {
     return self->file.close();
 }
