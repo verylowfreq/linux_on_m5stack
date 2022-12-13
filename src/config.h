@@ -20,7 +20,8 @@
 // #define SD_FAT_TYPE 1  // Use FAT16 and FAT32
 #define SDFAT_FILE_TYPE 3  // Use FAT16, FAT32 and exFAT
 
-#define SPI_SPEED SD_SCK_MHZ(26)
+#define SPI_SPEED_KHZ (26 * 1000UL)
+#define SPI_SLOWSPEED_KHZ (18 * 1000UL)
 #define SD_CS_PIN 4  // == TFCARD_CS_PIN
 #define PIN_NUM_MISO 19
 #define PIN_NUM_MOSI 23

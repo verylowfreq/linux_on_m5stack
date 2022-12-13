@@ -27,7 +27,7 @@
 #ifdef USE_SDFILE_SDFAT
 typedef struct {
     bool is_initialized;
-    SdFat32 sd;
+    SdFs sd;
 } sdfilecontext_t;
 
 #endif
@@ -42,7 +42,7 @@ typedef struct {
 
 #ifdef USE_SDFILE_SDFAT
 typedef struct {
-    File32 file;
+    FsFile file;
 } sdfile_t;
 #endif
 
@@ -54,7 +54,7 @@ typedef struct {
 #endif
 
 // Initialize this library
-bool sdfile_init(sdfilecontext_t* self);
+bool sdfile_init(sdfilecontext_t* self, uint32_t spi_freq_khz);
 
 bool sdfile_open_read(sdfilecontext_t* ctx, sdfile_t* self, const char* filepath);
 
@@ -78,9 +78,13 @@ void sdfile_set_spibus_ready(sdfilecontext_t* self, bool (*func)(void));
 
 #ifdef USE_SDFILE_SDFAT
 
-bool sdfile_init(sdfilecontext_t* self) {
+bool sdfile_init(sdfilecontext_t* self, uint32_t spi_freq_khz) {
+    if (self->is_initialized) {
+        return true;
+    }
+
     DEBUG("sdfile uses SdFat.");
-    if (!self->sd.begin(SD_CS_PIN, SPI_SPEED)) {
+    if (!self->sd.begin(SD_CS_PIN, spi_freq_khz * 1000UL)) {
         ERROR("Failed to sd.begin() with code %d", self->sd.sdErrorCode());
         return false;
     }
@@ -177,7 +181,11 @@ void wait_for_spibus_free(sdfilecontext_t* self) {
     }
 }
 
-bool sdfile_init(sdfilecontext_t* self) {
+bool sdfile_init(sdfilecontext_t* self, uint32_t spi_freq_khz) {
+    if (self->is_initialized) {
+        return true;
+    }
+
     DEBUG("sdfile uses sdspi in ESP-IDF.");
     wait_for_spibus_free(self);
 
@@ -185,7 +193,7 @@ bool sdfile_init(sdfilecontext_t* self) {
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = VSPI_HOST;
-    host.max_freq_khz = SDFILE_SDMMC_FREQ;
+    host.max_freq_khz = spi_freq_khz;
 
     spi_bus_config_t spibuscfg = {
         .mosi_io_num = PIN_NUM_MOSI,

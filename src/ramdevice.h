@@ -28,7 +28,7 @@ public:
 
   uint32_t init(bool zerofill, size_t sdfile_buffersize) {
     if (!sdfile_open_readwrite(&sdfilectx, &this->file, this->filepath)) {
-      ERROR("Error. Cannot open %s for RAM image.\n", this->filepath);
+      ERROR("Error. Cannot open %s for RAM image.", this->filepath);
       this->size = 0;
       return 0;
     }

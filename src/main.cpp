@@ -16,14 +16,6 @@ sdfilecontext_t sdfilectx;
 
 M5Display& Lcd = M5.Lcd;
 
-bool spibus_is_ready(void) {
-#ifdef USE_SDFILE_SDSPI
-  return true;
-#endif
-#ifdef USE_SDFILE_SDFAT
-  return true;
-#endif
-}
 
 class Stopwatch_Seconds {
 public:
@@ -300,7 +292,6 @@ bool update_ramsize_in_dtb(uint32_t dtb_addr, uint32_t newramsize) {
 }
 
 void draw_banner(void) {
-  spibus_is_ready(); 
   Lcd.clear();
   Lcd.setTextSize(3);
   Lcd.fillRect(0, 0, 320, 8 * 4, TFT_BLUE);
@@ -323,7 +314,6 @@ void draw_banner(void) {
   Lcd.println();
   Lcd.setTextSize(1);
   Lcd.println();
-  spibus_is_ready(); 
 }
 
 Stopwatch_Seconds stopwatch;
@@ -342,40 +332,6 @@ void draw_header(void) {
   Lcd.printf("RAM$:hit=%7.4f%%,miss=%7.4f%%", hitrate1, missrate);
   Lcd.setCursor(curx, cury);
   Lcd.setTextColor(TFT_WHITE);
-}
-
-void config_over_serial(void) {
-  while (true) {
-    M5.update();
-    if (M5.BtnB.wasPressed()) {
-      return;
-    }
-    if (Serial.available()) {
-      String input = Serial.readStringUntil('\n');
-      input.trim();
-      Serial.println(input);
-
-      if (input.equals("help") || input.length() == 0) {
-        Serial.println("Available commands: dumpstate, nodumpstate");
-
-      } else if (input.equals("nodumpstate")) {
-        enable_dumpstate_over_serial = false;
-        Serial.println("OK.");
-
-      } else if (input.equals("dumpstate")) {
-        enable_dumpstate_over_serial = true;
-        Serial.println("OK.");
-      
-      } else if (input.equals("run")) {
-        Serial.println("OK.");
-        return;
-      
-      } else {
-        Serial.println("Unknown command. 'help' to show help");
-      }
-    }
-    delay(10);
-  }
 }
 
 
@@ -400,13 +356,6 @@ void test_keyboardface(void) {
 }
 
 void test_sdcard(void) {
-
-  DEBUG("Init SD");
-
-  sdfilecontext_t sdfilectx;
-  if (!sdfile_init(&sdfilectx)) {
-    PANIC("Failed to sdfile_init()");
-  }
 
   DEBUG("Open file");
   sdfile_t file;
@@ -441,7 +390,7 @@ bool save_vmstate(const char* filepath, struct MiniRV32IMAState* src) {
     ERROR("Failed to open %s", filepath);
     return false;
   }
-  // sdfile_seek(&file, 0);
+  
   size_t len = sizeof(struct MiniRV32IMAState);
   size_t wrlen = sdfile_write(&file, len, src);
   if (wrlen != len) {
@@ -493,11 +442,6 @@ bool hibernate(void) {
 }
 
 bool resume(void) {
-  DEBUG("Init SD");
-  if (!sdfile_init(&sdfilectx)) {
-    PANIC("Failed to init SDCard");
-  }
-  sdfile_set_spibus_ready(&sdfilectx, spibus_is_ready);
 
   DEBUG("Init RAM...");
   uint32_t ramsize = __ram.init(false, RAMDEVICE_SDFILE_BUFLEN);
@@ -522,15 +466,11 @@ bool resume(void) {
 
 bool startnew(void) {
   
-  DEBUG("Init SD");
-  if (!sdfile_init(&sdfilectx)) {
-    PANIC("Failed to init SDCard");
-  }
-  sdfile_set_spibus_ready(&sdfilectx, spibus_is_ready);
-
   DEBUG("Init RAM...");
   uint32_t ramsize = __ram.init(false, RAMDEVICE_SDFILE_BUFLEN);
   if (ramsize == 0) {
+    ERROR("Failed to init RAM due to failure of opening /ram.img.");
+    ERROR("Reset while pressing BtnC on your right to try slower speed.");
     PANIC("Failed to init RAM.");
   }
   
@@ -580,6 +520,51 @@ bool startnew(void) {
   return true;
 }
 
+
+/** Initialize and speed verification SDCard on early booting */
+void init_sd(void) {
+
+  // To set the SDCard in SPI mode, initialize SDCard first.
+  uint32_t sd_spi_speed_khz = SPI_SPEED_KHZ;
+  M5.update();
+  if (M5.BtnC.isPressed()) {
+    sd_spi_speed_khz = SPI_SLOWSPEED_KHZ;
+  }
+  while (M5.BtnC.isPressed()) {
+    M5.update();
+    delay(10);
+  }
+
+  uint8_t buf[512];
+  sdfile_t file;
+
+  DEBUG("Init SD with %u[KHz]", sd_spi_speed_khz);
+  if (!sdfile_init(&sdfilectx, sd_spi_speed_khz)) {
+    goto aborted;
+  }
+  DEBUG("Open /boot.bin");
+  if (!sdfile_open_read(&sdfilectx, &file, "/boot.bin")) {
+    goto aborted;
+  }
+  DEBUG("Read 512 bytes from/boot.bin");
+  if (sdfile_read(&file, 512, buf) != 512) {
+    goto aborted;
+  }
+  DEBUG("OK.");
+  sdfile_close(&file);
+
+success:
+  return;
+
+aborted:
+  M5.begin(true, false, false, false);
+  M5.Lcd.init();
+  M5.Lcd.clear();
+  ERROR("Failed to init SDCard or read /boot.bin");
+  ERROR("Reset while pressing BtnC on your right to try slower speed.");
+  PANIC("Boot sequence stopped.");
+}
+
 // ---- Defined in M5Stack library's Power.cpp
 
 #define CURRENT_100MA  (0x01 << 0)
@@ -591,6 +576,11 @@ bool startnew(void) {
 void setup() {
   esp_log_level_set("*", ESP_LOG_INFO);
   adc_power_acquire();
+
+  Serial.begin(115200);
+
+  // Init SDCard first to let it into SPI mode.
+  init_sd();
 
   M5.begin(true, false, true, true);
 
@@ -617,8 +607,6 @@ void setup() {
   draw_banner();
   Lcd.println("Press left button to resume...");
   Lcd.println("Press center button to start fresh...");
-
-  // config_over_serial();
 
   bool mode_resume = false;
   bool mode_startnew = false;
