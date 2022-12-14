@@ -934,10 +934,13 @@ static uint32_t HandleControlStore( uint32_t addy, uint32_t val )
 
   if (addy == 0x10001000) {
     led_r = val;
+    update_led();
   } else if (addy == 0x10001004) {
-    led_r = val;
+    led_g = val;
+    update_led();
   } else if (addy == 0x10001008) {
-    led_r = val;
+    led_b = val;
+    update_led();
   }
 #endif
 	return 0;
