@@ -38,3 +38,9 @@
 #define RAMDEVICE_SDFILE_BUFLEN 4096
 
 // #define SDFILE_SDSPI_DEFUALT_BUFLEN 4096
+
+
+// Use NeoPixel LEDs of M5Stack Faces II
+#define USE_NEOPIXEL
+#define NPLED_COUNT 10
+#define NPLED_PIN   15

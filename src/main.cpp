@@ -565,6 +565,47 @@ aborted:
   PANIC("Boot sequence stopped.");
 }
 
+#ifdef USE_NEOPIXEL
+
+#include <Adafruit_NeoPixel.h>
+
+// Register for LED color red
+// MSB: (Reserved:22) 10, 9, 8, ... 2, 1 (LSB)
+uint32_t led_r;
+uint32_t led_g;
+uint32_t led_b;
+
+Adafruit_NeoPixel neoPixel(NPLED_COUNT, NPLED_PIN);
+
+void update_led(void) {
+  uint32_t r = led_r;
+  uint32_t g = led_g;
+  uint32_t b = led_b;
+  for (int i = 0; i < 10; i++) {
+    uint8_t rval = 64;
+    uint8_t gval = 32;
+    uint8_t bval = 32;
+    if (!(r & 0x01)) rval = 0;
+    if (!(g & 0x01)) gval = 0;
+    if (!(b & 0x01)) bval = 0;
+    neoPixel.setPixelColor(i, rval, gval, bval);
+    r = r >> 1;
+    g = g >> 1;
+    b = b >> 1;
+  }
+  neoPixel.show();
+}
+
+void init_led(void) {
+  led_r = 0;
+  led_g = 0;
+  led_b = 0;
+  neoPixel.begin();
+  update_led();
+}
+
+#endif
+
 // ---- Defined in M5Stack library's Power.cpp
 
 #define CURRENT_100MA  (0x01 << 0)
@@ -581,6 +622,10 @@ void setup() {
 
   // Init SDCard first to let it into SPI mode.
   init_sd();
+
+#ifdef USE_NEOPIXEL
+  init_led();
+#endif
 
   M5.begin(true, false, true, true);
 
@@ -884,6 +929,17 @@ static uint32_t HandleControlStore( uint32_t addy, uint32_t val )
 		// fflush( stdout );
     PrintLCD((char)val);
 	}
+#ifdef USE_NEOPIXEL
+  // LED control registers
+
+  if (addy == 0x10001000) {
+    led_r = val;
+  } else if (addy == 0x10001004) {
+    led_r = val;
+  } else if (addy == 0x10001008) {
+    led_r = val;
+  }
+#endif
 	return 0;
 }
 
@@ -895,6 +951,15 @@ static uint32_t HandleControlLoad( uint32_t addy )
 		return 0x60 | IsKBHit();
 	else if( addy == 0x10000000 && IsKBHit() )
 		return ReadKBByte();
+#ifdef USE_NEOPIXEL
+  if (addy == 0x10001000) {
+    return led_r;
+  } else if (addy == 0x10001004) {
+    return led_g;
+  } else if (addy == 0x10001008) {
+    return led_b;
+  }
+#endif
 	return 0;
 }
 
